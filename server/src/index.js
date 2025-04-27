@@ -5,6 +5,7 @@ const {
   getAllCategories,
   getAllDailyProductsWithCategory,
 } = require("./services");
+const rateLimit = require("express-rate-limit");
 
 require("dotenv").config();
 
@@ -14,9 +15,43 @@ const PORT = process.env.PORT || 3001;
 const jobs = new Map();
 const results = new Map();
 const categoriesMap = new Map();
+const activeScrapeJobs = new Map();
 
 app.use(cors());
 app.use(express.json());
+
+const limiter = rateLimit({
+  windowMs: 1 * 60 * 1000,
+  max: 60,
+  message: {
+    success: false,
+    error: "Too many requests",
+    message: "You have exceeded the 60 requests in 1 minute limit",
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+app.use(limiter);
+
+function limitOneScrapeJobPerIp(req, res, next) {
+  const ip = req.ip;
+
+  if (req.path === "/api/scrape" && req.method === "POST") {
+    if (activeScrapeJobs.has(ip)) {
+      return res.status(429).json({
+        success: false,
+        error: "Too many scrape jobs",
+        message: `You already have an active scraping job (jobId: ${activeScrapeJobs.get(
+          ip
+        )}). Please wait until it finishes.`,
+      });
+    }
+  }
+  next();
+}
+
+app.use(limitOneScrapeJobPerIp);
 
 app.get("/api/categories", async (req, res) => {
   try {
@@ -37,7 +72,7 @@ app.get("/api/categories", async (req, res) => {
 
 app.post("/api/scrape", async (req, res) => {
   try {
-    const { categoryId, limit = 100 } = req.body;
+    const { categoryId, limit = 50 } = req.body;
 
     if (!categoryId) {
       return res.status(400).json({
@@ -48,6 +83,8 @@ app.post("/api/scrape", async (req, res) => {
     }
 
     const jobId = `job_${uuidv4()}`;
+
+    const ip = req.ip;
 
     jobs.set(jobId, {
       id: jobId,
@@ -61,6 +98,8 @@ app.post("/api/scrape", async (req, res) => {
       products: [],
     });
 
+    activeScrapeJobs.set(ip, jobId);
+
     scrapeCategory(jobId, categoryId, limit, (progress, status, error) => {
       const job = jobs.get(jobId);
       if (job) {
@@ -71,16 +110,22 @@ app.post("/api/scrape", async (req, res) => {
         }
         if (status === "completed") {
           job.completedAt = new Date().toISOString();
+          if (activeScrapeJobs.get(ip) === jobId) {
+            activeScrapeJobs.delete(ip);
+          }
         }
         jobs.set(jobId, job);
       }
     }).catch((error) => {
-      console.error("TEST: Scrape error", error);
+      console.error("Scrape error", error);
       const job = jobs.get(jobId);
       if (job) {
         job.status = "error";
         job.error = error.message;
         jobs.set(jobId, job);
+        if (activeScrapeJobs.get(ip) === jobId) {
+          activeScrapeJobs.delete(ip);
+        }
       }
     });
 

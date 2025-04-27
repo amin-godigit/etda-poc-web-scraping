@@ -93,7 +93,12 @@ export default function HomeComponent() {
       }
     } catch (err) {
       console.error("Error starting scraping:", err);
-      setError("Network error: Unable to start scraping");
+      if (err instanceof Error) {
+        setError(err?.message || "Network error: Unable to start scraping");
+      } else {
+        setError("An unknown error occurred");
+      }
+      setStatus("error");
     }
   };
 
