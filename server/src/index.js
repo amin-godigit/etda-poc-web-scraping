@@ -323,7 +323,7 @@ const scrapeCategory = async (jobId, categoryId, limit, callback) => {
                 price:
                   (product?.item_card?.item?.price ||
                     product?.ads_item_card?.ads?.price ||
-                    0) / 10000,
+                    0) / 100000,
                 rating:
                   product?.item_card?.item?.item_rating?.rating_star ||
                   product?.ads_item_card?.ads?.item_rating?.rating_star ||

@@ -10,7 +10,6 @@ interface StarRatingProps {
   maxRating?: number;
   size?: "sm" | "md" | "lg";
   color?: string;
-  onChange?: (rating: number) => void;
   readOnly?: boolean;
   className?: string;
 }
@@ -55,8 +54,10 @@ export function StarRating({
   const renderStar = (index: number) => {
     const displayRating = hoverRating || rating;
     const value = index + 1;
-    const filled = displayRating >= value;
-    const halfFilled = displayRating === index + 0.5;
+
+    const isFilled = displayRating >= value;
+    const isHalfFilled =
+      !isFilled && displayRating > index && displayRating < value;
 
     return (
       <div
@@ -72,8 +73,7 @@ export function StarRating({
         <Star
           className={cn("stroke-current text-gray-300", sizeClasses[size])}
         />
-
-        {halfFilled && (
+        {isHalfFilled && (
           <div className="absolute inset-0 overflow-hidden w-1/2">
             <Star
               className={cn(
@@ -84,8 +84,7 @@ export function StarRating({
             />
           </div>
         )}
-
-        {filled && !halfFilled && (
+        {isFilled && (
           <Star
             className={cn(
               "absolute inset-0 stroke-current fill-current",

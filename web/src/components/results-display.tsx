@@ -88,14 +88,14 @@ export function ResultsDisplay({ results }: ResultsDisplayProps) {
           <TableBody>
             {currentItems.map((product, index) => (
               <TableRow key={index}>
-                <TableCell className="font-medium whitespace-normal break-words w-160">
+                <TableCell className="font-medium whitespace-normal break-words w-140 min-w-140">
                   {product?.name}
                 </TableCell>
                 <TableCell>{formatPrice(product?.price)}</TableCell>
                 <TableCell>
                   <div className="flex items-center">
                     {StarRating({
-                      rating: product?.rating,
+                      rating: Number(product?.rating.toFixed(1)),
                       readOnly: true,
                       size: "sm",
                     })}
@@ -124,7 +124,7 @@ export function ResultsDisplay({ results }: ResultsDisplayProps) {
                     <p>Rating:</p>
                     <div className="flex items-center">
                       {StarRating({
-                        rating: product?.rating,
+                        rating: Number(product?.rating.toFixed(1)),
                         readOnly: true,
                         size: "sm",
                       })}
