@@ -1,8 +1,12 @@
 const express = require("express");
 const cors = require("cors");
 const { v4: uuidv4 } = require("uuid");
-const puppeteer = require("puppeteer");
-const cheerio = require("cheerio");
+const {
+  getAllCategories,
+  getAllDailyProductsWithCategory,
+} = require("./services");
+
+require("dotenv").config();
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -33,13 +37,13 @@ app.get("/api/categories", async (req, res) => {
 
 app.post("/api/scrape", async (req, res) => {
   try {
-    const { categoryId, categoryUrl, limit = 50 } = req.body;
+    const { categoryId, limit = 100 } = req.body;
 
-    if (!categoryId || !categoryUrl) {
+    if (!categoryId) {
       return res.status(400).json({
         success: false,
         error: "Missing required parameters",
-        message: "Category ID and categoryUrl are required",
+        message: "Category ID is required",
       });
     }
 
@@ -57,26 +61,20 @@ app.post("/api/scrape", async (req, res) => {
       products: [],
     });
 
-    scrapeCategory(
-      jobId,
-      categoryId,
-      categoryUrl,
-      limit,
-      (progress, status, error) => {
-        const job = jobs.get(jobId);
-        if (job) {
-          job.progress = progress;
-          job.status = status;
-          if (error) {
-            job.error = error;
-          }
-          if (status === "completed") {
-            job.completedAt = new Date().toISOString();
-          }
-          jobs.set(jobId, job);
+    scrapeCategory(jobId, categoryId, limit, (progress, status, error) => {
+      const job = jobs.get(jobId);
+      if (job) {
+        job.progress = progress;
+        job.status = status;
+        if (error) {
+          job.error = error;
         }
+        if (status === "completed") {
+          job.completedAt = new Date().toISOString();
+        }
+        jobs.set(jobId, job);
       }
-    ).catch((error) => {
+    }).catch((error) => {
       console.error("TEST: Scrape error", error);
       const job = jobs.get(jobId);
       if (job) {
@@ -177,53 +175,58 @@ app.get("/api/results/:jobId", (req, res) => {
 
 const fetchCategories = async () => {
   try {
-    const browser = await puppeteer.launch({
-      headless: true,
-      args: ["--no-sandbox", "--disable-setuid-sandbox"],
-    });
-    const page = await browser.newPage();
+    const categories = await getAllCategories();
+    if (categories?.data?.category_list?.length) {
+      for (const category of categories.data.category_list) {
+        const { catid, parent_catid, children, ...rest } = category;
+        const isMain = category.level === 1 || parent_catid === 0;
+        const newCategory = {
+          id: catid,
+          isMain,
+          parentId: isMain ? null : parent_catid,
+          ...rest,
+        };
+        categoriesMap.set(newCategory.id, newCategory);
 
-    await page.goto("https://www.lazada.co.th/#hp-categories", {
-      waitUntil: "networkidle2",
-    });
+        if (children?.length) {
+          for (const subCategory of children) {
+            const {
+              catid: subCatId,
+              parent_catid: subParentCatId,
+              ...subRest
+            } = subCategory;
+            const newSubCategory = {
+              id: subCatId,
+              isMain: false,
+              parentId: catid,
+              ...subRest,
+            };
+            categoriesMap.set(newSubCategory.id, newSubCategory);
+          }
+        }
+      }
+    }
 
-    await new Promise((resolve) => setTimeout(resolve, 3000));
-
-    const content = await page.content();
-    const $ = cheerio.load(content);
-
-    const categories = [];
-
-    categoriesMap.clear();
-
-    $(".card-categories-ul > div").each((index, element) => {
-      const title = $(element).find("p").text().trim();
-      const url = $(element).find("a").attr("href") || "";
-      const category = {
-        name: title,
-        url: url.replace(/^\/\//, "https://"),
-        id: index.toString(),
-      };
-      categories.push(category);
-      categoriesMap.set(category.id, category);
-    });
-
-    await browser.close();
-
-    return categories || [];
+    return (
+      categories?.data?.category_list
+        .filter((cat) => cat.level === 1)
+        .map(({ catid, children, ...rest }) => ({
+          id: catid,
+          ...rest,
+        })) || []
+    );
   } catch (error) {
-    console.error("Error during fetching categories:", error);
-    throw error;
+    if (error.code === "ENOENT") {
+      console.warn("Categories file not found");
+      return [];
+    } else {
+      console.error("Error reading categories:", error);
+      throw error;
+    }
   }
 };
 
-const scrapeCategory = async (
-  jobId,
-  categoryId,
-  categoryUrl,
-  limit,
-  callback
-) => {
+const scrapeCategory = async (jobId, categoryId, limit, callback) => {
   const job = jobs.get(jobId);
   if (!job) {
     const error = `Job ${jobId} not found`;
@@ -231,216 +234,118 @@ const scrapeCategory = async (
     throw new Error(error);
   }
 
-  if (!categoryUrl || !categoryId) {
-    const error = `Category with ID ${categoryId} - ${categoryUrl} not found`;
-    callback(job.progress, "error", error);
-    throw new Error(error);
-  }
-
   const category = categoriesMap.get(categoryId);
   if (!category) {
-    const error = `Category with ID ${categoryId} not found in categories`;
+    const error = `Main category with ID ${categoryId} not found`;
     callback(job.progress, "error", error);
     throw new Error(error);
   }
 
-  let browser;
   try {
-    browser = await puppeteer.launch({
-      headless: false,
-      args: ["--no-sandbox", "--disable-setuid-sandbox"],
-    });
-
-    const page = await browser.newPage();
-
-    await page.setUserAgent(
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-    );
-
     let products = [];
     let currentPage = 1;
+    const baseDelay = 1000;
 
     while (products.length < limit) {
-      console.log(`Scraping page ${currentPage}: ${categoryUrl}`);
-      await page.goto(categoryUrl, {
-        waitUntil: "networkidle2",
-        timeout: 60000,
-      });
-
-      await page.waitForSelector('div[data-qa-locator="general-products"]', {
-        timeout: 10000,
-      });
-
-      const scrollToBottom = async () => {
-        const scrollStep = 500;
-        const delayBetweenSteps = 500;
-        const maxSteps = 50;
-
-        const stepCount = await page.evaluate(
-          async (step, delay, maxSteps) => {
-            let currentPosition = 0;
-            let maxHeight = document.body.scrollHeight;
-            let stepCount = 0;
-
-            while (currentPosition < maxHeight && stepCount < maxSteps) {
-              currentPosition += step;
-              window.scrollTo(0, currentPosition);
-
-              maxHeight = document.body.scrollHeight;
-              stepCount++;
-
-              await new Promise((resolve) => setTimeout(resolve, delay));
-            }
-
-            return stepCount;
-          },
-          scrollStep,
-          delayBetweenSteps,
-          maxSteps
+      try {
+        const productsParsed = await getAllDailyProductsWithCategory(
+          categoryId,
+          currentPage
         );
-
-        if (stepCount >= maxSteps) {
-          console.log(
-            `Page ${currentPage}: Reached max scroll steps (${maxSteps}), stopping scroll.`
-          );
-        }
-      };
-
-      await scrollToBottom();
-      const waitForImagesToLoad = async (maxRetries = 3, retryDelay = 2000) => {
-        for (let attempt = 1; attempt <= maxRetries; attempt++) {
-          try {
-            await page.waitForSelector(
-              'div[data-qa-locator="general-products"] div > div > div > div > div > a > div > img',
-              {
-                timeout: 5000,
-              }
+        if (Array.isArray(productsParsed)) {
+          if (productsParsed.length === 0) {
+            console.warn(
+              `No data available for page ${currentPage}, stopping.`
             );
-
-            const allImagesLoaded = await page.evaluate(() => {
-              const images = document.querySelectorAll(
-                'div[data-qa-locator="general-products"] div > div > div > div > div > a > div > img'
-              );
-              return Array.from(images).every((img) => {
-                const src = img.getAttribute("src");
-                return src && !src.startsWith("data:image");
-              });
-            });
-
-            if (allImagesLoaded) {
-              console.log(
-                `Page ${currentPage}: All images loaded successfully.`
-              );
-              return true;
-            } else {
-              console.log(
-                `Page ${currentPage}: Some images not loaded yet, retrying (${attempt}/${maxRetries})...`
-              );
-              await new Promise((resolve) => setTimeout(resolve, retryDelay));
-            }
-          } catch (error) {
-            console.error(
-              `Page ${currentPage}: Error waiting for images (attempt ${attempt}/${maxRetries}):`,
-              error
-            );
-            if (attempt === maxRetries) {
-              console.log(
-                `Page ${currentPage}: Max retries reached, proceeding with scraping.`
-              );
-              return false;
-            }
-            await new Promise((resolve) => setTimeout(resolve, retryDelay));
+            break;
           }
-        }
-        return false;
-      };
 
-      await waitForImagesToLoad();
+          for (const product of productsParsed) {
+            if (products.length >= limit) break;
+            if (
+              product?.item_card?.item?.itemid ||
+              product?.ads_item_card?.ads?.itemid
+            ) {
+              products.push({
+                id:
+                  product?.item_card?.item?.itemid ||
+                  product?.ads_item_card?.ads?.itemid ||
+                  "",
+                name:
+                  product?.item_card?.item?.name ||
+                  product?.ads_item_card?.ads?.name ||
+                  "",
+                price:
+                  (product?.item_card?.item?.price ||
+                    product?.ads_item_card?.ads?.price ||
+                    0) / 10000,
+                rating:
+                  product?.item_card?.item?.item_rating?.rating_star ||
+                  product?.ads_item_card?.ads?.item_rating?.rating_star ||
+                  0,
+                reviews:
+                  (product?.item_card?.item?.item_rating?.rcount_with_context ||
+                    0) +
+                    (product?.item_card?.item?.item_rating?.rcount_with_image ||
+                      0) ||
+                  (product?.ads_item_card?.ads?.item_rating
+                    ?.rcount_with_context || 0) +
+                    (product?.ads_item_card?.ads?.item_rating
+                      ?.rcount_with_image || 0),
+                sold:
+                  product?.item_card?.item?.sold ||
+                  product?.ads_item_card?.ads?.sold ||
+                  0,
+                seller: {
+                  id:
+                    product?.item_card?.item?.shopid ||
+                    product?.ads_item_card?.ads?.shopid ||
+                    "",
+                  name:
+                    product?.item_card?.item?.shop_name ||
+                    product?.ads_item_card?.ads?.shop_name ||
+                    "",
+                  rating: null,
+                  verified:
+                    product?.item_card?.item?.shopee_verified ||
+                    product?.ads_item_card?.ads?.shopee_verified ||
+                    false,
+                  isOfficial:
+                    product?.item_card?.item?.is_official_shop ||
+                    product?.ads_item_card?.ads?.is_official_shop ||
+                    false,
+                },
+                imageUrl: `https://down-th.img.susercontent.com/file/${
+                  product?.item_card?.item?.image ||
+                  product?.ads_item_card?.ads?.image ||
+                  ""
+                }`,
+                url: "",
+              });
+            }
 
-      const content = await page.content();
-      const $ = cheerio.load(content);
-
-      const elements = $(
-        'div[data-qa-locator="general-products"] > div'
-      ).toArray();
-      console.log(
-        `Page ${currentPage} - Total elements found: ${elements.length}`
-      );
-
-      for (const [index, element] of elements.entries()) {
-        if (products.length >= limit) {
-          break;
-        }
-
-        const name = $(element).find("a").text().trim();
-        const price = $(element)
-          .find("div > div > div > div:nth-child(2) > div:nth-child(3) > span")
-          .text()
-          .trim()
-          .replace(/฿|,/g, "");
-        const sold =
-          $(element)
-            .find(
-              "div > div > div > div:nth-child(2) > div:nth-child(5) > span > span"
-            )
-            .text()
-            .trim()
-            .replace(/ชิ้น/g, "") || "0";
-        const url =
-          $(element).find("div > div > div > div > a").attr("href") || "";
-        let image = $(element)
-          .find("div > div > div > div > a > div > img")
-          .attr("src");
-
-        if (image) {
-          if (image.startsWith("data:image")) {
-            image = "";
+            const progress = (products.length / limit) * 100;
+            callback(progress, "scraping", null);
           }
         } else {
-          image = "No image found";
+          console.warn(
+            `Data for page ${currentPage} is not an array, stopping.`
+          );
+          break;
         }
-
-        const data = {
-          name,
-          price: parseFloat(price) || 0,
-          sold: parseInt(sold) || 0,
-          image,
-          url: url.replace(/^\/\//, "https://"),
-        };
-
-        products.push(data);
-        job.products = products;
-        jobs.set(jobId, job);
-
-        const progress = (products.length / limit) * 100;
-        callback(progress, "scraping", null);
-
-        await new Promise((resolve) => setTimeout(resolve, 50));
+      } catch (err) {
+        if (err.code === "ENOENT") {
+          console.warn(`Data for page ${currentPage} not found, stopping.`);
+          break;
+        } else {
+          console.error(`Error fetching page ${currentPage}:`, err);
+          throw err;
+        }
       }
 
-      const nextPageButton = await page.$('li[title="Next Page"] > button');
-      if (!nextPageButton || products.length >= limit) {
-        break;
+      if (products.length < limit) {
+        await new Promise((resolve) => setTimeout(resolve, baseDelay));
       }
-
-      const isDisabled = await page.evaluate(
-        (button) => button.hasAttribute("disabled"),
-        nextPageButton
-      );
-      if (isDisabled) {
-        console.log(
-          `Page ${currentPage}: Next Page button is disabled, stopping pagination.`
-        );
-        break;
-      }
-
-      await Promise.all([
-        nextPageButton.click(),
-        page.waitForSelector('div[data-qa-locator="general-products"]', {
-          timeout: 60000,
-        }),
-      ]);
-      await new Promise((resolve) => setTimeout(resolve, 2000));
 
       currentPage++;
     }
@@ -450,6 +355,9 @@ const scrapeCategory = async (
         `Warning: Only ${products.length} products found, but limit is ${limit}`
       );
     }
+
+    job.products = products;
+    jobs.set(jobId, job);
 
     results.set(jobId, {
       jobId,
@@ -461,14 +369,14 @@ const scrapeCategory = async (
       scrapedAt: new Date().toISOString(),
       data: products,
     });
-    callback(100, "completed", null);
 
-    await browser.close();
+    callback(100, "completed", null);
     return products;
   } catch (error) {
     console.error(`Scraping error for job ${jobId}:`, error);
     const errorMessage =
       error instanceof Error ? error.message : "An unknown error occurred";
+
     const job = jobs.get(jobId);
     if (job) {
       results.set(jobId, {
@@ -477,13 +385,12 @@ const scrapeCategory = async (
           id: categoryId,
           name: category.name,
         },
-        totalItems: job.products.length,
+        totalItems: job.products?.length || 0,
         scrapedAt: new Date().toISOString(),
-        data: job.products,
+        data: job.products || [],
       });
     }
     callback(job?.progress || 0, "error", errorMessage);
-    if (browser) await browser.close();
     throw error;
   }
 };

@@ -39,7 +39,7 @@ export function CategorySelector({
         <SelectTrigger id="category-select" className="w-full">
           <SelectValue
             placeholder={
-              isLoading ? "Loading data from Lazada..." : "Select a category"
+              isLoading ? "Loading categories..." : "Select a category"
             }
           />
         </SelectTrigger>

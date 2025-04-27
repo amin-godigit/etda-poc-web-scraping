@@ -1,11 +1,12 @@
-import { Progress } from "@/components/ui/progress"
-import { Loader2 } from "lucide-react"
+import { Progress } from "@/components/ui/progress";
+import { Loader2 } from "lucide-react";
 
 interface LoadingStateProps {
-  progress: number
+  progress: number;
+  limit: number;
 }
 
-export function LoadingState({ progress }: LoadingStateProps) {
+export function LoadingState({ progress, limit }: LoadingStateProps) {
   return (
     <div className="flex flex-col items-center justify-center h-full space-y-6">
       <div className="flex items-center">
@@ -14,10 +15,12 @@ export function LoadingState({ progress }: LoadingStateProps) {
       </div>
 
       <div className="text-center">
-        <p className="mb-2">{progress} of 100 products scraped</p>
+        <p className="mb-2">
+          {progress} of {limit} products scraped
+        </p>
         <Progress value={progress} className="w-64 h-2" />
         <p className="mt-2 text-sm text-muted-foreground">{progress}%</p>
       </div>
     </div>
-  )
+  );
 }

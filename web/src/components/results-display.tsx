@@ -19,8 +19,8 @@ import {
   PaginationPrevious,
 } from "@/components/ui/pagination";
 import { Card, CardContent } from "@/components/ui/card";
-import { Star, StarHalf } from "lucide-react";
 import { useMediaQuery } from "@/hooks/use-media-query";
+import { StarRating } from "./star-rating";
 
 interface ResultsDisplayProps {
   results: ScrapingResult;
@@ -46,39 +46,6 @@ export function ResultsDisplay({ results }: ResultsDisplayProps) {
 
   const formatNumber = (num: number) => {
     return new Intl.NumberFormat("en-US").format(num);
-  };
-
-  const renderRatingStars = (rating: number) => {
-    const stars = [];
-    const fullStars = Math.floor(rating);
-    const hasHalfStar = rating % 1 >= 0.5;
-
-    for (let i = 0; i < fullStars; i++) {
-      stars.push(
-        <Star
-          key={`star-${i}`}
-          className="h-4 w-4 fill-primary text-primary inline"
-        />
-      );
-    }
-
-    if (hasHalfStar) {
-      stars.push(
-        <StarHalf key="half-star" className="h-4 w-4 text-primary inline" />
-      );
-    }
-
-    const emptyStars = 5 - stars.length;
-    for (let i = 0; i < emptyStars; i++) {
-      stars.push(
-        <Star
-          key={`empty-${i}`}
-          className="h-4 w-4 text-muted-foreground inline"
-        />
-      );
-    }
-
-    return stars;
   };
 
   const maxPagesToShow = 5;
@@ -121,11 +88,17 @@ export function ResultsDisplay({ results }: ResultsDisplayProps) {
           <TableBody>
             {currentItems.map((product, index) => (
               <TableRow key={index}>
-                <TableCell className="font-medium">{product?.name}</TableCell>
+                <TableCell className="font-medium whitespace-normal break-words w-160">
+                  {product?.name}
+                </TableCell>
                 <TableCell>{formatPrice(product?.price)}</TableCell>
                 <TableCell>
                   <div className="flex items-center">
-                    {renderRatingStars(product?.rating)}
+                    {StarRating({
+                      rating: product?.rating,
+                      readOnly: true,
+                      size: "sm",
+                    })}
                     <span className="ml-1">
                       ({product?.rating?.toFixed(1) || 0})
                     </span>
@@ -150,7 +123,11 @@ export function ResultsDisplay({ results }: ResultsDisplayProps) {
 
                     <p>Rating:</p>
                     <div className="flex items-center">
-                      {renderRatingStars(product?.rating)}
+                      {StarRating({
+                        rating: product?.rating,
+                        readOnly: true,
+                        size: "sm",
+                      })}
                       <span className="ml-1">
                         ({product?.rating?.toFixed(1) || 0})
                       </span>

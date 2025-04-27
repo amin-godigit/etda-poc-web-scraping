@@ -12,13 +12,13 @@ const Axios = {
     return data;
   },
 
-  startScrape: async (categoryId, categoryUrl, limit = 100) => {
+  startScrape: async (categoryId, limit = 100) => {
     const response = await fetch(`${API_BASE_URL}/scrape`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ categoryId, categoryUrl, limit }),
+      body: JSON.stringify({ categoryId, limit }),
     });
 
     const data = await response.json();

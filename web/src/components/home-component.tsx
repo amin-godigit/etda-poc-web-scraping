@@ -8,6 +8,8 @@ import { ErrorDisplay } from "./error-display";
 import { ResultsDisplay } from "./results-display";
 import Axios from "@/api";
 
+const LIMIT = 100;
+
 export default function HomeComponent() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [selectedCategory, setSelectedCategory] = useState<Category | null>(
@@ -82,11 +84,7 @@ export default function HomeComponent() {
       setProgress(0);
       setStatus("scraping");
 
-      const data = await Axios.startScrape(
-        selectedCategory.id,
-        selectedCategory.url,
-        100
-      );
+      const data = await Axios.startScrape(selectedCategory.id, LIMIT);
 
       if (data.success) {
         setJobId(data.jobId);
@@ -107,7 +105,7 @@ export default function HomeComponent() {
     <main className="flex min-h-screen flex-col items-center p-4 md:p-6">
       <div className="w-full max-w-5xl space-y-6">
         <h1 className="text-2xl font-bold text-center border-b pb-4">
-          Lazada Scraping Tool
+          Shopee Scraping Tool
         </h1>
 
         <div className="flex flex-col sm:flex-row gap-4 items-center">
@@ -137,9 +135,9 @@ export default function HomeComponent() {
           {error ? (
             <ErrorDisplay error={error} onTryAgain={handleTryAgain} />
           ) : status && status === "scraping" ? (
-            <LoadingState progress={progress} />
+            <LoadingState progress={progress} limit={LIMIT} />
           ) : results ? (
-            <ResultsDisplay results={results as ScrapingResult || []} />
+            <ResultsDisplay results={(results as ScrapingResult) || []} />
           ) : (
             <div className="flex items-center justify-center h-[400px] text-gray-500">
               Results will appear here
