@@ -46,7 +46,7 @@ export function CategorySelector({
         <SelectContent>
           {categories.map((category) => (
             <SelectItem key={category.id} value={category.id}>
-              {category.name}
+              {category.display_name}
             </SelectItem>
           ))}
         </SelectContent>

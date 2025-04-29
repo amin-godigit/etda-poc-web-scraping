@@ -19,6 +19,7 @@ export default function HomeComponent() {
   const [jobId, setJobId] = useState<ScrapingJob | null>(null);
   const [results, setResults] = useState<ScrapingResult | null>(null);
   const [progress, setProgress] = useState(0);
+  const [progressItem, setProgressItem] = useState(0);
   const [status, setStatus] = useState("idle");
 
   useEffect(() => {
@@ -49,6 +50,7 @@ export default function HomeComponent() {
         try {
           const statusData = await Axios.checkStatus(jobId);
           setProgress(statusData.progress);
+          setProgressItem(statusData.scrapedItems);
 
           if (statusData.status === "completed") {
             setStatus("completed");
@@ -82,6 +84,7 @@ export default function HomeComponent() {
       setError(null);
       setResults(null);
       setProgress(0);
+      setProgressItem(0);
       setStatus("scraping");
 
       const data = await Axios.startScrape(selectedCategory.id, LIMIT);
@@ -140,7 +143,11 @@ export default function HomeComponent() {
           {error ? (
             <ErrorDisplay error={error} onTryAgain={handleTryAgain} />
           ) : status && status === "scraping" ? (
-            <LoadingState progress={progress} limit={LIMIT} />
+            <LoadingState
+              progressItem={progressItem}
+              progress={progress}
+              limit={LIMIT}
+            />
           ) : results ? (
             <ResultsDisplay results={(results as ScrapingResult) || []} />
           ) : (

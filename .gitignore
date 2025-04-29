@@ -1,5 +1,6 @@
 /server/node_modules
 /server/.env
+/server/src/scripts/venv/
 
 /web/node_modules
 /web/.env

@@ -1,6 +1,7 @@
 export interface Category {
   id: string;
-  name: string;
+  name?: string;
+  display_name?: string;
 }
 
 export interface ScrapingJob {

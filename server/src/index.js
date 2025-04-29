@@ -16,11 +16,12 @@ const jobs = new Map();
 const results = new Map();
 const categoriesMap = new Map();
 const activeScrapeJobs = new Map();
+categoryKeywords = {};
 
 app.use(cors());
 app.use(express.json());
 
-const limiter = rateLimit({
+const scrapeLimiter = rateLimit({
   windowMs: 1 * 60 * 1000,
   max: 60,
   message: {
@@ -31,8 +32,6 @@ const limiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
 });
-
-app.use(limiter);
 
 function limitOneScrapeJobPerIp(req, res, next) {
   const ip = req.ip;
@@ -51,8 +50,6 @@ function limitOneScrapeJobPerIp(req, res, next) {
   next();
 }
 
-app.use(limitOneScrapeJobPerIp);
-
 app.get("/api/categories", async (req, res) => {
   try {
     const categories = await fetchCategories();
@@ -70,80 +67,91 @@ app.get("/api/categories", async (req, res) => {
   }
 });
 
-app.post("/api/scrape", async (req, res) => {
-  try {
-    const { categoryId, limit = 50 } = req.body;
+app.post(
+  "/api/scrape",
+  scrapeLimiter,
+  limitOneScrapeJobPerIp,
+  async (req, res) => {
+    try {
+      const { categoryId, limit = 50 } = req.body;
 
-    if (!categoryId) {
-      return res.status(400).json({
-        success: false,
-        error: "Missing required parameters",
-        message: "Category ID is required",
+      if (!categoryId) {
+        return res.status(400).json({
+          success: false,
+          error: "Missing required parameters",
+          message: "Category ID is required",
+        });
+      }
+
+      const jobId = `job_${uuidv4()}`;
+
+      const ip = req.ip;
+
+      jobs.set(jobId, {
+        id: jobId,
+        categoryId,
+        limit,
+        status: "scraping",
+        progress: 0,
+        startedAt: new Date().toISOString(),
+        error: null,
+        completedAt: null,
+        products: [],
       });
-    }
 
-    const jobId = `job_${uuidv4()}`;
+      activeScrapeJobs.set(ip, jobId);
 
-    const ip = req.ip;
-
-    jobs.set(jobId, {
-      id: jobId,
-      categoryId,
-      limit,
-      status: "scraping",
-      progress: 0,
-      startedAt: new Date().toISOString(),
-      error: null,
-      completedAt: null,
-      products: [],
-    });
-
-    activeScrapeJobs.set(ip, jobId);
-
-    scrapeCategory(jobId, categoryId, limit, (progress, status, error) => {
-      const job = jobs.get(jobId);
-      if (job) {
-        job.progress = progress;
-        job.status = status;
-        if (error) {
-          job.error = error;
+      scrapeCategory(
+        jobId,
+        categoryId,
+        limit,
+        (progress, status, error, products) => {
+          const job = jobs.get(jobId);
+          if (job) {
+            job.progress = progress;
+            job.status = status;
+            job.products = products;
+            if (error) {
+              job.error = error;
+            }
+            if (status === "completed") {
+              job.completedAt = new Date().toISOString();
+              if (activeScrapeJobs.get(ip) === jobId) {
+                activeScrapeJobs.delete(ip);
+              }
+            }
+            jobs.set(jobId, job);
+          }
         }
-        if (status === "completed") {
-          job.completedAt = new Date().toISOString();
+      ).catch((error) => {
+        console.error("Scrape error", error);
+        const job = jobs.get(jobId);
+        if (job) {
+          job.status = "error";
+          job.error = error.message;
+          jobs.set(jobId, job);
           if (activeScrapeJobs.get(ip) === jobId) {
             activeScrapeJobs.delete(ip);
           }
         }
-        jobs.set(jobId, job);
-      }
-    }).catch((error) => {
-      console.error("Scrape error", error);
-      const job = jobs.get(jobId);
-      if (job) {
-        job.status = "error";
-        job.error = error.message;
-        jobs.set(jobId, job);
-        if (activeScrapeJobs.get(ip) === jobId) {
-          activeScrapeJobs.delete(ip);
-        }
-      }
-    });
+      });
 
-    res.json({
-      success: true,
-      message: "Scraping initiated",
-      jobId,
-      estimatedTime: `${Math.ceil(limit / 10)} seconds`,
-    });
-  } catch (error) {
-    console.error("Error starting scrape:", error);
-    res.status(500).json({
-      success: false,
-      error: "Failed to initiate scraping",
-      message: error.message,
-    });
+      res.json({
+        success: true,
+        message: "Scraping initiated",
+        jobId,
+        estimatedTime: `${Math.ceil(limit / 10)} seconds`,
+      });
+    } catch (error) {
+      console.error("Error starting scrape:", error);
+      res.status(500).json({
+        success: false,
+        error: "Failed to initiate scraping",
+        message: error.message,
+      });
+    }
   }
-});
+);
 
 app.get("/api/status/:jobId", (req, res) => {
   const { jobId } = req.params;
@@ -222,6 +230,9 @@ const fetchCategories = async () => {
   try {
     const categories = await getAllCategories();
     if (categories?.data?.category_list?.length) {
+      categoriesMap.clear();
+      const childCategories = new Map();
+
       for (const category of categories.data.category_list) {
         const { catid, parent_catid, children, ...rest } = category;
         const isMain = category.level === 1 || parent_catid === 0;
@@ -232,6 +243,13 @@ const fetchCategories = async () => {
           ...rest,
         };
         categoriesMap.set(newCategory.id, newCategory);
+
+        if (!isMain && parent_catid) {
+          if (!childCategories.has(parent_catid)) {
+            childCategories.set(parent_catid, []);
+          }
+          childCategories.get(parent_catid).push(newCategory.display_name);
+        }
 
         if (children?.length) {
           for (const subCategory of children) {
@@ -247,7 +265,19 @@ const fetchCategories = async () => {
               ...subRest,
             };
             categoriesMap.set(newSubCategory.id, newSubCategory);
+
+            if (!childCategories.has(catid)) {
+              childCategories.set(catid, []);
+            }
+            childCategories.get(catid).push(newSubCategory.display_name);
           }
+        }
+      }
+
+      for (const [parentId, childDisplayNames] of childCategories) {
+        const parentCategory = categoriesMap.get(parentId);
+        if (parentCategory && parentCategory.display_name) {
+          categoryKeywords[parentCategory.display_name] = childDisplayNames;
         }
       }
     }
@@ -275,14 +305,14 @@ const scrapeCategory = async (jobId, categoryId, limit, callback) => {
   const job = jobs.get(jobId);
   if (!job) {
     const error = `Job ${jobId} not found`;
-    callback(0, "error", error);
+    callback(0, "error", error, []);
     throw new Error(error);
   }
 
   const category = categoriesMap.get(categoryId);
   if (!category) {
     const error = `Main category with ID ${categoryId} not found`;
-    callback(job.progress, "error", error);
+    callback(job.progress, "error", error, []);
     throw new Error(error);
   }
 
@@ -290,26 +320,122 @@ const scrapeCategory = async (jobId, categoryId, limit, callback) => {
     let products = [];
     let currentPage = 1;
     const baseDelay = 1000;
+    const classificationThreshold = 0.65;
+    const batchSize = 10;
 
-    while (products.length < limit) {
+    while (products.length < limit && currentPage < 6) {
       try {
         const productsParsed = await getAllDailyProductsWithCategory(
-          categoryId,
           currentPage
         );
-        if (Array.isArray(productsParsed)) {
-          if (productsParsed.length === 0) {
-            console.warn(
-              `No data available for page ${currentPage}, stopping.`
-            );
-            break;
+        if (!Array.isArray(productsParsed) || productsParsed.length === 0) {
+          console.warn(`No data available for page ${currentPage}, stopping.`);
+          break;
+        }
+
+        let batch = [];
+        for (const product of productsParsed) {
+          if (products.length >= limit) break;
+          const productName =
+            product?.item_card?.item?.name ||
+            product?.ads_item_card?.ads?.name ||
+            "";
+          if (!productName) continue;
+
+          if (!isRelevantByKeywords(productName, category.display_name)) {
+            continue;
           }
 
-          for (const product of productsParsed) {
-            if (products.length >= limit) break;
+          batch.push({ product, productName });
+
+          if (
+            batch.length >= batchSize ||
+            products.length + batch.length >= limit
+          ) {
+            const batchProductNames = batch.map((b) => b.productName);
+            const batchResults = await classifyProductBatch(
+              batchProductNames,
+              category.display_name
+            );
+
+            batch.forEach(({ product }, index) => {
+              const isRelevant = batchResults[index];
+              if (isRelevant.probability >= classificationThreshold) {
+                products.push({
+                  id:
+                    product?.item_card?.item?.itemid ||
+                    product?.ads_item_card?.ads?.itemid ||
+                    "",
+                  name: productName,
+                  price:
+                    (product?.item_card?.item?.price ||
+                      product?.ads_item_card?.ads?.price ||
+                      0) / 100000,
+                  rating:
+                    product?.item_card?.item?.item_rating?.rating_star ||
+                    product?.ads_item_card?.ads?.item_rating?.rating_star ||
+                    0,
+                  reviews:
+                    (product?.item_card?.item?.item_rating
+                      ?.rcount_with_context || 0) +
+                      (product?.item_card?.item?.item_rating
+                        ?.rcount_with_image || 0) ||
+                    (product?.ads_item_card?.ads?.item_rating
+                      ?.rcount_with_context || 0) +
+                      (product?.ads_item_card?.ads?.item_rating
+                        ?.rcount_with_image || 0),
+                  sold:
+                    product?.item_card?.item?.sold ||
+                    product?.ads_item_card?.ads?.sold ||
+                    0,
+                  seller: {
+                    id:
+                      product?.item_card?.item?.shopid ||
+                      product?.ads_item_card?.ads?.shopid ||
+                      "",
+                    name:
+                      product?.item_card?.item?.shop_name ||
+                      product?.ads_item_card?.ads?.shop_name ||
+                      "",
+                    rating: null,
+                    verified:
+                      product?.item_card?.item?.shopee_verified ||
+                      product?.ads_item_card?.ads?.shopee_verified ||
+                      false,
+                    isOfficial:
+                      product?.item_card?.item?.is_official_shop ||
+                      product?.ads_item_card?.ads?.is_official_shop ||
+                      false,
+                  },
+                  imageUrl: `https://down-th.img.susercontent.com/file/${
+                    product?.item_card?.item?.image ||
+                    product?.ads_item_card?.ads?.image ||
+                    ""
+                  }`,
+                  url: "",
+                  classificationScore: isRelevant.probability,
+                });
+              }
+            });
+
+            batch = [];
+            const progress = (products.length / limit) * 100;
+            callback(progress, "scraping", null, products);
+          }
+        }
+
+        if (batch.length > 0) {
+          const batchProductNames = batch.map((b) => b.productName);
+          const batchResults = await classifyProductBatch(
+            batchProductNames,
+            category.display_name
+          );
+
+          batch.forEach(({ product }, index) => {
+            const isRelevant = batchResults[index];
             if (
-              product?.item_card?.item?.itemid ||
-              product?.ads_item_card?.ads?.itemid
+              isRelevant.probability >= classificationThreshold &&
+              products.length < limit
             ) {
               products.push({
                 id:
@@ -366,33 +492,25 @@ const scrapeCategory = async (jobId, categoryId, limit, callback) => {
                   ""
                 }`,
                 url: "",
+                classificationScore: isRelevant.probability,
               });
             }
+          });
 
-            const progress = (products.length / limit) * 100;
-            callback(progress, "scraping", null);
-          }
-        } else {
-          console.warn(
-            `Data for page ${currentPage} is not an array, stopping.`
-          );
-          break;
+          const progress = (products.length / limit) * 100;
+          callback(progress, "scraping", null, products);
         }
       } catch (err) {
-        if (err.code === "ENOENT") {
-          console.warn(`Data for page ${currentPage} not found, stopping.`);
-          break;
-        } else {
-          console.error(`Error fetching page ${currentPage}:`, err);
-          throw err;
-        }
+        console.warn(`Data for page ${currentPage} not found, stopping.`);
+        console.warn(`Error fetching page ${currentPage}: ${err.message}`);
+        break;
       }
 
       if (products.length < limit) {
         await new Promise((resolve) => setTimeout(resolve, baseDelay));
       }
-
       currentPage++;
+      console.log(`Scraping page ${currentPage}...`);
     }
 
     if (products.length < limit) {
@@ -408,35 +526,76 @@ const scrapeCategory = async (jobId, categoryId, limit, callback) => {
       jobId,
       category: {
         id: categoryId,
-        name: category.name,
+        name: category.display_name,
       },
       totalItems: products.length,
       scrapedAt: new Date().toISOString(),
       data: products,
     });
 
-    callback(100, "completed", null);
+    callback(100, "completed", null, products);
     return products;
   } catch (error) {
     console.error(`Scraping error for job ${jobId}:`, error);
     const errorMessage =
       error instanceof Error ? error.message : "An unknown error occurred";
 
-    const job = jobs.get(jobId);
-    if (job) {
-      results.set(jobId, {
-        jobId,
-        category: {
-          id: categoryId,
-          name: category.name,
-        },
-        totalItems: job.products?.length || 0,
-        scrapedAt: new Date().toISOString(),
-        data: job.products || [],
-      });
+    job.products = products;
+    jobs.set(jobId, job);
+
+    results.set(jobId, {
+      jobId,
+      category: {
+        id: categoryId,
+        name: category.display_name,
+      },
+      totalItems: products.length,
+      scrapedAt: new Date().toISOString(),
+      data: products,
+    });
+
+    callback(
+      products.length > 0 ? 100 : job.progress,
+      "completed",
+      errorMessage,
+      products
+    );
+    return products;
+  }
+};
+
+const isRelevantByKeywords = (productName, categoryName) => {
+  const keywords = categoryKeywords[categoryName] || [];
+  return (
+    keywords.length === 0 ||
+    keywords.some((keyword) =>
+      productName.toLowerCase().includes(keyword.toLowerCase())
+    )
+  );
+};
+
+const classifyProductBatch = async (productNames, categoryName) => {
+  console.time(`classifyProductBatch-${productNames.length}`);
+  try {
+    const response = await fetch("http://localhost:5000/classify", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        product_names: productNames,
+        category_name: categoryName,
+      }),
+    });
+    const result = await response.json();
+    if (result.error) {
+      console.error("Classification error:", result.error);
+      return productNames.map(() => ({ probability: 0 }));
     }
-    callback(job?.progress || 0, "error", errorMessage);
-    throw error;
+    console.timeEnd(`classifyProductBatch-${productNames.length}`);
+    return result.probabilities.map((prob) => ({ probability: prob }));
+  } catch (err) {
+    console.error("HTTP classification error:", err);
+    console.timeEnd(`classifyProductBatch-${productNames.length}`);
+    return productNames.map(() => ({ probability: 0 }));
   }
 };
 

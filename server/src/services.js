@@ -17,6 +17,8 @@ const getAllCategories = async () => {
       }
     );
 
+    console.log("Fetching categories...");
+
     if (!categoriesResponse.ok) {
       throw new Error("Failed to fetch categories");
     }
@@ -27,7 +29,10 @@ const getAllCategories = async () => {
     console.error("Error fetching categories:", error);
 
     try {
-      const filePath = path.resolve(__dirname, "./data/sp_categories.json");
+      const filePath = path.resolve(
+        __dirname,
+        "./data/sp_categories_tree.json"
+      );
       const categoriesData = await fs.readFile(filePath, "utf-8");
       return JSON.parse(categoriesData);
     } catch (fileError) {
@@ -39,10 +44,10 @@ const getAllCategories = async () => {
   }
 };
 
-const getAllDailyProductsWithCategory = async (categoryId, offset) => {
+const getAllDailyProductsWithCategory = async (offset) => {
   try {
     const response = await fetch(
-      `${BASE_URL}/homepage/get_daily_discover?bundle=daily_discover_main&limit=100&offset=${offset}&category_id=${categoryId}`,
+      `${BASE_URL}/homepage/get_daily_discover?bundle=daily_discover_main&limit=100&offset=${offset}`,
       {
         method: "GET",
         headers: {
@@ -52,6 +57,8 @@ const getAllDailyProductsWithCategory = async (categoryId, offset) => {
         },
       }
     );
+
+    console.log("Fetching daily products with category...");
 
     if (!response.ok) {
       throw new Error("Failed to fetch categories");
