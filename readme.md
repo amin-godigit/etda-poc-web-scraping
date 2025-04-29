@@ -1,4 +1,4 @@
-# Shopee API Documentation
+# Project Document
 
 ## 1. Category Tree
 **Endpoint:**  
@@ -27,6 +27,12 @@ This API retrieves daily product recommendations in the specified category. You 
 
 ---
 
+## Run 3 Projects
+- Run Express Server
+- Run Flask Server
+- Run Web Application
+
+---
 
 ## RUN Flask Server - LLM Model:
 ***To create a virtual environment named venv***
@@ -54,6 +60,33 @@ pip install -r requirements.txt
 
 ```bash
 python .\src\scripts\classify.py
+```
+
+---
+
+
+## RUN Express Server - CORE Functions:
+
+***Install Node packages***
+```bash
+npm install
+```
+
+***Run Express server***
+```bash
+npm run dev
+```
+
+## RUN Next - Web Application:
+
+***Install Node packages***
+```bash
+npm install
+```
+
+***Run web***
+```bash
+npm run dev
 ```
 
 ## Notes:
